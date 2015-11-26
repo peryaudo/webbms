@@ -80,7 +80,6 @@ class BmsParser {
     this._content = content;
 
     this.BACKGROUND = '01';
-    this.BPM_CHANGE = '03';
     this.KEYS_1P = ['11', '12', '13', '14', '15', '16', '17', '18', '19'];
   }
 
@@ -88,6 +87,7 @@ class BmsParser {
     this.wavs = {};
     this.bmps = {};
     this.bars = [];
+    this.bpmChanges = [];
 
     this._content.split(/\r?\n/).map(line => {
       if (this._parseAttribute(line)) {
@@ -105,12 +105,8 @@ class BmsParser {
         const rawNotes = m[3].split(/(.{2})/).filter(Boolean);
 
         const notes = rawNotes.map((note, i) => {
-          if (note === '00') {
+          if (note === '00' || note === '03') {
             return null;
-          }
-
-          if (ch === this.BPM_CHANGE) {
-            return { time: (i / rawNotes.length) + bar, bpm: parseInt(note, 16) };
           }
 
           return { time: (i / rawNotes.length) + bar, key: note };
@@ -120,6 +116,13 @@ class BmsParser {
           this.bars[bar] = this.bars[bar] || {};
           this.bars[bar][ch] = (this.bars[bar][ch] || []).concat(notes);
         }
+
+        const bpmChanges = rawNotes.map((note, i) => {
+          if (ch === '03') {
+            return { time: (i / rawNotes.length) + bar, bpm: parseInt(note, 16) };
+          }
+        }).filter(Boolean);
+        this.bpmChanges = this.bpmChanges.concat(bpmChanges);
       }
     });
 
@@ -154,6 +157,11 @@ class BmsParser {
     }
 
     return notes;
+  }
+
+  getBpmChangesBetween(fromBar, toBar) {
+    return this.bpmChanges.filter(note =>
+        fromBar < note.time && note.time <= toBar);
   }
 
   _parseAttribute(line) {
@@ -303,8 +311,7 @@ class PlayerModel {
       const tmpBarCnt = nextBarCnt +
         this._currentBpm * (diffMsec - passedMsec) / (4 * 1000 * 60);
 
-      const notes = this._bms.getNotesBetween(
-          nextBarCnt, tmpBarCnt, this._bms.BPM_CHANGE);
+      const notes = this._bms.getBpmChangesBetween(nextBarCnt, tmpBarCnt);
       if (notes.length === 0) {
         nextBarCnt = tmpBarCnt;
         break;
