@@ -98,7 +98,18 @@ class BmsParser {
         return;
       }
 
-      const m = line.match(/^#([0-9]{3})([0-9]{2}):([0-9A-Z]+)$/);
+      let m;
+
+      m = line.match(/^#([0-9]{3})02:(.+)$/);
+      if (m) {
+        const bar = parseInt(m[1], 10);
+        const scale = parseFloat(m[2]);
+        this.bpmChanges.push({ time: bar, scale: scale });
+        this.bpmChanges.push({ time: bar + 1, scale: 1 });
+        return;
+      }
+
+      m = line.match(/^#([0-9]{3})([0-9]{2}):([0-9A-Z]+)$/);
       if (m) {
         const bar = parseInt(m[1], 10);
         const ch = m[2];
@@ -135,6 +146,21 @@ class BmsParser {
         bar[ch].sort((a, b) => a.time - b.time);
       });
     });
+
+    this.bpmChanges.sort((a, b) => a.time - b.time);
+    this.bpmChanges = this.bpmChanges.reduce((acc, change) => {
+      const last = acc[acc.length - 1] || {};
+      if (last.time !== change.time) {
+        return acc.concat(change);
+      }
+
+      last.bpm = last.bpm || change.bpm;
+      last.scale = last.scale || change.scale;
+      if (last.scale && change.scale && change.scale !== 1) {
+        last.scale = change.scale;
+      }
+      return acc;
+    }, []);
   }
 
   getNotesBetween(fromBar, toBar, ch) {
@@ -256,6 +282,7 @@ class PlayerModel {
 
       this._bms.parse();
       this._currentBpm = this._bms.bpm;
+      this._currentBarScale = 1;
     });
   }
 
@@ -308,8 +335,9 @@ class PlayerModel {
     let passedMsec = 0;
     let nextBarCnt = this._barCnt;
     for (let i = 0; i < 32; i++) {
+      const effectiveBpm = this._currentBpm / this._currentBarScale;
       const tmpBarCnt = nextBarCnt +
-        this._currentBpm * (diffMsec - passedMsec) / (4 * 1000 * 60);
+        effectiveBpm * (diffMsec - passedMsec) / (4 * 1000 * 60);
 
       const notes = this._bms.getBpmChangesBetween(nextBarCnt, tmpBarCnt);
       if (notes.length === 0) {
@@ -318,10 +346,15 @@ class PlayerModel {
       }
 
       const change = notes[0];
+      if (change.bpm) {
+        this._currentBpm = change.bpm;
+      }
+      if (change.scale) {
+        this._currentBarScale = change.scale;
+      }
 
-      passedMsec += (change.time - nextBarCnt) * 4 * 1000 * 60 / this._currentBpm;
+      passedMsec += (change.time - nextBarCnt) * 4 * 1000 * 60 / effectiveBpm;
       nextBarCnt = change.time;
-      this._currentBpm = change.bpm;
     }
 
     const prevBarCnt = this._barCnt;
