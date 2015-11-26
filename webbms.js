@@ -67,11 +67,11 @@ class ZipArchive {
   }
 
   _getString(offset, n) {
-    const bytes = [];
+    let result = '';
     for (let i = 0; i < n; i++) {
-      bytes.push(this._view.getUint8(offset + i));
+      result += String.fromCharCode(this._view.getUint8(offset + i));
     }
-    return String.fromCharCode.apply(null, bytes);
+    return result;
   }
 }
 
@@ -138,7 +138,7 @@ class BmsParser {
     let notes = [];
 
     function timeBetweenFromAndTo(note) {
-      return fromBar <= note.time && note.time < toBar;
+      return fromBar < note.time && note.time <= toBar;
     }
 
     for (let i = Math.floor(fromBar); i <= Math.floor(toBar); i++) {
@@ -237,7 +237,7 @@ class PlayerModel {
     this._bmsName = bmsName;
 
     this._barWindow = 1;
-    this._barCnt = 0;
+    this._barCnt = -1;
   }
 
   load() {
@@ -297,22 +297,24 @@ class PlayerModel {
   }
 
   update(diffMsec) {
-    let msecRemain = diffMsec;
+    let passedMsec = 0;
     let nextBarCnt = this._barCnt;
-    while (msecRemain > 1e-4) {
+    for (let i = 0; i < 32; i++) {
       const tmpBarCnt = nextBarCnt +
-        this._currentBpm * msecRemain / (4 * 1000 * 60);
+        this._currentBpm * (diffMsec - passedMsec) / (4 * 1000 * 60);
 
       const notes = this._bms.getNotesBetween(
           nextBarCnt, tmpBarCnt, this._bms.BPM_CHANGE);
-      if (notes.length > 0) {
-        msecRemain -= (notes[0].time - nextBarCnt) * 4 * 1000 * 60 / this._currentBpm;
-        nextBarCnt = notes[0].time;
-        this._currentBpm = notes[0].bpm;
-      } else {
-        msecRemain = 0;
+      if (notes.length === 0) {
         nextBarCnt = tmpBarCnt;
+        break;
       }
+
+      const change = notes[0];
+
+      passedMsec += (change.time - nextBarCnt) * 4 * 1000 * 60 / this._currentBpm;
+      nextBarCnt = change.time;
+      this._currentBpm = change.bpm;
     }
 
     const prevBarCnt = this._barCnt;
@@ -342,12 +344,17 @@ class PlayerController {
   resume() {
     this._modelLoaded = false;
 
-    this._model = new PlayerModel('Aeventyr.zip', 'Aventyr[N].bme');
+    // this._model = new PlayerModel('Aeventyr.zip', 'Aventyr[N].bme');
+    // this._model = new PlayerModel('Heiseng.zip', 'heiseng7.bme');
+    // this._model = new PlayerModel('Poppin.zip', 'ps_normal.bme');
+    this._model = new PlayerModel('Maid.zip', '_DoS_Maid_01_normal7.bme');
     this._model.load().then(() => {
       return this._loadAudios();
     }).then(() => {
       this._modelLoaded = true;
       this._lastTime = new Date().getTime();
+    }).catch(e => {
+      console.log(e);
     });
 
     this._surface = new PlayerTextSurface();
@@ -379,6 +386,8 @@ class PlayerController {
   }
 
   _loadAudios() {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+
     this._audioBuffers = {};
     this._audioContext = new AudioContext();
 
@@ -389,12 +398,14 @@ class PlayerController {
   }
 
   _loadAudio(key, fileName) {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       this._audioContext.decodeAudioData(
           this._model.getFileBuffer(fileName),
           audioBuffer => {
             this._audioBuffers[key] = audioBuffer;
             resolve();
+          }, () => {
+            reject('failed to decode audio data');
           });
     });
   }
@@ -403,10 +414,14 @@ class PlayerController {
     document.write(notes.map(note => note.key).join(' ') + ' ');
 
     notes.map(note => {
-      const source = this._audioContext.createBufferSource();
-      source.buffer = this._audioBuffers[note.key];
-      source.connect(this._audioContext.destination, 0, 0);
-      source.start(0);
+      if (this._audioBuffers[note.key]) {
+        const source = this._audioContext.createBufferSource();
+        source.buffer = this._audioBuffers[note.key];
+        source.connect(this._audioContext.destination, 0, 0);
+        source.start(0);
+      } else {
+        console.log('warning: key ' + note.key + ' does not exist');
+      }
     });
   }
 }
